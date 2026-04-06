@@ -15,6 +15,8 @@ It exists to keep a stable version for deployments that use NAD receivers over T
 
 ### HACS
 
+[![Open your Home Assistant instance and add this repository inside HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Wise-Technology-Poland&repository=homeassistant-nad&category=integration)
+
 1. Open `HACS -> Integrations`.
 2. Open `Custom repositories`.
 3. Add this repository as category `Integration`.
