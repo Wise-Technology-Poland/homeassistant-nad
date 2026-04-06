@@ -15,7 +15,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_TYPE
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from nad_receiver import NADReceiver, NADReceiverTCP, NADReceiverTelnet
@@ -40,10 +40,10 @@ _LOGGER = logging.getLogger(__name__)
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
-    async_add_entities: AddConfigEntryEntitiesCallback,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the NAD Receiver media player."""
-    coordinator: NADReceiverCoordinator = config_entry.runtime_data
+    coordinator: NADReceiverCoordinator = hass.data[DOMAIN][config_entry.entry_id]
 
     # Fetch initial data so we have data when entities subscribe
     await coordinator.async_config_entry_first_refresh()
@@ -122,22 +122,25 @@ class NAD(CoordinatorEntity, MediaPlayerEntity):
                 # instead they only support stepping the volume up or down
                 self._attr_volume_level = None
 
-            source = int(self.coordinator.data.get(self.zone + ".Source"))
-            self._attr_source = self._source_dict.get(source)
+            source = self.coordinator.data.get(self.zone + ".Source")
+            if source is not None and str(source).isdigit():
+                self._attr_source = self._source_dict.get(int(source))
+            else:
+                self._attr_source = None
 
         self.async_write_ha_state()
 
     def turn_off(self) -> None:
         """Turn the media player off."""
         response = self.coordinator.exec_command(self.zone + ".Power", "=", "Off")
-        if response.lower() == "off":
+        if response is not None and response.lower() == "off":
             self._attr_state = MediaPlayerState.OFF
             self.schedule_update_ha_state()
 
     def turn_on(self) -> None:
         """Turn the media player on."""
         response = self.coordinator.exec_command(self.zone + ".Power", "=", "On")
-        if response.lower() == "on":
+        if response is not None and response.lower() == "on":
             self._attr_state = MediaPlayerState.ON
             self.schedule_update_ha_state()
 
@@ -171,7 +174,9 @@ class NAD(CoordinatorEntity, MediaPlayerEntity):
         else:
             response = self.coordinator.exec_command(self.zone + ".Mute", "=", "Off")
 
-        if mute and response.lower() != "on":
+        if response is None:
+            _LOGGER.error("Failed to change mute state")
+        elif mute and response.lower() != "on":
             _LOGGER.error("Failed to mute volume")
         elif not mute and response.lower() != "off":
             _LOGGER.error("Failed to unmute volume")
@@ -194,7 +199,7 @@ class NAD(CoordinatorEntity, MediaPlayerEntity):
         _LOGGER.debug("Source ID: %s", source_id)
 
         response = self.coordinator.exec_command(self.zone + ".Source", "=", source_id)
-        if response.isnumeric():
+        if response is not None and response.isnumeric():
             self._attr_source = self._source_dict.get(int(response))
             self.schedule_update_ha_state()
 

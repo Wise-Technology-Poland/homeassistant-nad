@@ -1,0 +1,3 @@
+# Local workspace noise
+*.pyc
+__pycache__/

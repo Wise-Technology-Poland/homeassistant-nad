@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 import homeassistant.helpers.config_validation as cv
 import serial
@@ -77,18 +77,38 @@ class NADReceiverCoordinator(DataUpdateCoordinator):
         self.config = entry.data
         self.options = entry.options
         self.unique_id = entry.entry_id
+        self._listener_commands = []
 
+        self.receiver = self._build_receiver()
+
+    def _build_receiver(self) -> NADReceiver:
+        """Create a transport for the configured receiver type."""
         config_type = self.config[CONF_TYPE]
+
         if config_type == CONF_TYPE_SERIAL:
             serial_port = self.config[CONF_SERIAL_PORT]
-            self.receiver = NADReceiver(serial_port)
-        elif config_type == CONF_TYPE_TELNET:
+            return NADReceiver(serial_port)
+        if config_type == CONF_TYPE_TELNET:
             host = self.config[CONF_HOST]
             port = self.config[CONF_PORT]
-            self.receiver = NADReceiverTelnet(host, port)
-        elif config_type == CONF_TYPE_TCP:
+            return NADReceiverTelnet(host, port)
+        if config_type == CONF_TYPE_TCP:
             host = self.config[CONF_HOST]
-            self.receiver = NADReceiverTCP(host)
+            return NADReceiverTCP(host)
+
+        raise ConfigEntryNotReady("Unsupported NAD connection type")
+
+    def _reconnect_receiver(self) -> None:
+        """Re-create the receiver transport after a network disconnect."""
+        transport = getattr(self.receiver, "transport", None)
+        close = getattr(transport, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                _LOGGER.debug("Ignoring error while closing NAD transport", exc_info=True)
+
+        self.receiver = self._build_receiver()
 
     async def connect(self) -> bool:
         if not self.model:
@@ -168,22 +188,44 @@ class NADReceiverCoordinator(DataUpdateCoordinator):
         if value:
             cmd = f"{cmd}{value}"
 
-        if self.config[CONF_TYPE] == CONF_TYPE_SERIAL:
-            self.receiver.transport.ser.reset_input_buffer()
+        allow_retry = self.config[CONF_TYPE] != CONF_TYPE_SERIAL
+        attempt = 0
+        last_error: Exception | None = None
 
-        try:
-            msg = self.receiver.transport.communicate(cmd)
-            _LOGGER.debug("sent: '%s' reply: '%s'", command, msg)
+        while True:
+            attempt += 1
+            if self.config[CONF_TYPE] == CONF_TYPE_SERIAL:
+                self.receiver.transport.ser.reset_input_buffer()
 
-            if msg == "":
-                raise CommandNotSupportedError()
+            try:
+                msg = self.receiver.transport.communicate(cmd)
+                _LOGGER.debug("sent: '%s' reply: '%s'", command, msg)
 
-            if msg.lower().startswith(command.lower() + "="):
-                return msg.split("=")[1]
-        except UnicodeDecodeError as ex:
-            _LOGGER.error(ex)
+                if msg == "":
+                    raise CommandNotSupportedError()
 
-        return None
+                if msg.lower().startswith(command.lower() + "="):
+                    return msg.split("=")[1]
+            except UnicodeDecodeError as ex:
+                _LOGGER.error(ex)
+                return None
+            except (IOError, OSError, serial.SerialException) as ex:
+                last_error = ex
+                if not allow_retry or attempt > 1:
+                    raise
+
+                _LOGGER.warning(
+                    "NAD transport error during '%s', reconnecting once: %s",
+                    command,
+                    ex,
+                )
+                self._reconnect_receiver()
+                continue
+
+            if last_error is not None:
+                raise last_error
+
+            return None
 
     async def _async_update_data(self):
         """Fetch data from NAD Receiver."""
@@ -192,7 +234,7 @@ class NADReceiverCoordinator(DataUpdateCoordinator):
         except CommandNotSupportedError:
             self.power_state = None
             raise UpdateFailed("Error communicating with NAD Receiver")
-        except IOError as ex:
+        except (IOError, OSError, serial.SerialException) as ex:
             self.power_state = None
             raise UpdateFailed("Error communicating with NAD Receiver", ex)
 
@@ -250,10 +292,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             raise ConfigEntryNotReady(f"Unable to connect to NAD receiver")
 
         _LOGGER.info("NAD receiver is available")
-    except serial.SerialException as ex:
+    except (serial.SerialException, OSError, IOError) as ex:
         raise ConfigEntryNotReady(f"Unable to connect to NAD receiver") from ex
 
-    entry.runtime_data = receiver_coordinator
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = receiver_coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -264,10 +306,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    receiver_coordinator: NADReceiverCoordinator = entry.runtime_data
+    receiver_coordinator: NADReceiverCoordinator = hass.data[DOMAIN][entry.entry_id]
     await receiver_coordinator.disconnect()
 
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        hass.data[DOMAIN].pop(entry.entry_id)
+
+    return unload_ok
 
 
 async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
