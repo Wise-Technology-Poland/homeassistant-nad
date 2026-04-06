@@ -11,7 +11,7 @@ import serial
 import serial.tools.list_ports
 import voluptuous as vol
 from aiodiscover.discovery import _LOGGER
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
+from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PORT, CONF_TYPE, UnitOfSoundPressure
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
@@ -28,7 +28,7 @@ from homeassistant.helpers.selector import (
 )
 from nad_receiver import NADReceiver, NADReceiverTCP, NADReceiverTelnet
 
-from . import CommandNotSupportedError, NADReceiverCoordinator
+from . import NADReceiverCoordinator
 from .const import (
     CONF_DEFAULT_MAX_VOLUME,
     CONF_DEFAULT_MIN_VOLUME,
@@ -96,7 +96,7 @@ STEP_CONFIG_VOLUME_SCHEMA = vol.Schema(
 )
 
 
-class NADReceiverConfigFlow(ConfigFlow, domain=DOMAIN):
+class NADReceiverConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for NAD Receiver."""
 
     VERSION = 1
@@ -191,6 +191,7 @@ class NADReceiverConfigFlow(ConfigFlow, domain=DOMAIN):
             # Test if we can connect to the device and get model
             try:
                 receiver = NADReceiver(serial_port)
+                model = self.exec_command("Main.Model", "?")
             except (serial.SerialException, CommandNotSupportedError):
                 errors["base"] = "cannot_connect"
             else:
@@ -318,13 +319,20 @@ class NADReceiverConfigFlow(ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(
-        config_entry: ConfigEntry,
-    ) -> OptionsFlow:
+        config_entry: config_entries.ConfigEntry,
+    ) -> config_entries.OptionsFlow:
         """Create the options flow."""
-        return NADReceiverOptionsFlowHandler()
+        return NADReceiverOptionsFlowHandler(config_entry)
 
 
-class NADReceiverOptionsFlowHandler(OptionsFlow):
+class NADReceiverOptionsFlowHandler(config_entries.OptionsFlow):
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        """Initialize options flow."""
+        super().__init__()
+        _LOGGER.debug(config_entry.data)
+        self._config_entry = config_entry
+        self.sources = None
+
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -344,7 +352,7 @@ class NADReceiverOptionsFlowHandler(OptionsFlow):
             )
         else:
             data_schema = self.add_suggested_values_to_schema(
-                STEP_CONFIG_VOLUME_SCHEMA, self.config_entry.options
+                STEP_CONFIG_VOLUME_SCHEMA, self._config_entry.options
             )
 
         return self.async_show_form(
