@@ -78,6 +78,7 @@ class NADReceiverCoordinator(DataUpdateCoordinator):
         self.options = entry.options
         self.unique_id = entry.entry_id
         self._listener_commands = []
+        self._consecutive_failures = 0
 
         self.receiver = self._build_receiver()
 
@@ -201,7 +202,16 @@ class NADReceiverCoordinator(DataUpdateCoordinator):
                 msg = self.receiver.transport.communicate(cmd)
                 _LOGGER.debug("sent: '%s' reply: '%s'", command, msg)
 
-                if msg == "":
+                if not msg:
+                    if allow_retry and attempt == 1:
+                        _LOGGER.debug(
+                            "NAD returned no reply for '%s', reconnecting once",
+                            command,
+                        )
+                        self._reconnect_receiver()
+                        continue
+                    if operator != "?":
+                        return None
                     raise CommandNotSupportedError()
 
                 if msg.lower().startswith(command.lower() + "="):
@@ -232,16 +242,22 @@ class NADReceiverCoordinator(DataUpdateCoordinator):
         try:
             power_state = self.exec_command("Main.Power", "?")
         except CommandNotSupportedError:
-            self.power_state = None
-            raise UpdateFailed("Error communicating with NAD Receiver")
+            _LOGGER.debug("NAD receiver does not support Main.Power")
+            return self.data or {}
         except (IOError, OSError, serial.SerialException) as ex:
-            self.power_state = None
-            raise UpdateFailed("Error communicating with NAD Receiver", ex)
+            self._consecutive_failures += 1
+            _LOGGER.warning(
+                "Error communicating with NAD Receiver, keeping last state: %s", ex
+            )
+            return self.data or {}
 
         _LOGGER.debug("power_state: %s", power_state)
         if not power_state:
-            self.power_state = None
-            raise UpdateFailed("Error communicating with NAD Receiver")
+            self._consecutive_failures += 1
+            _LOGGER.debug("NAD receiver returned no power state, keeping last state")
+            return self.data or {}
+
+        self._consecutive_failures = 0
 
         if power_state.lower() == "on":
             self.power_state = MediaPlayerState.ON
@@ -295,6 +311,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except (serial.SerialException, OSError, IOError) as ex:
         raise ConfigEntryNotReady(f"Unable to connect to NAD receiver") from ex
 
+    entry.runtime_data = receiver_coordinator
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = receiver_coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -306,7 +323,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    receiver_coordinator: NADReceiverCoordinator = hass.data[DOMAIN][entry.entry_id]
+    receiver_coordinator: NADReceiverCoordinator = getattr(
+        entry, "runtime_data", hass.data[DOMAIN][entry.entry_id]
+    )
     await receiver_coordinator.disconnect()
 
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):

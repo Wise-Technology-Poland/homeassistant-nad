@@ -22,7 +22,9 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the NAD Receiver select."""
-    coordinator: NADReceiverCoordinator = config_entry.runtime_data
+    coordinator: NADReceiverCoordinator = getattr(
+        config_entry, "runtime_data", hass.data[DOMAIN][config_entry.entry_id]
+    )
 
     # Fetch initial data so we have data when entities subscribe
     # await coordinator.async_config_entry_first_refresh()
@@ -249,17 +251,13 @@ class NADReceiverSelect(CoordinatorEntity, SelectEntity):
             self._attr_available = True
         else:
             _LOGGER.debug("%s is not available", self.entity_description.key)
-            self._attr_available = False
 
         self.async_write_ha_state()
 
     @property
     def available(self) -> bool:
         """Return if entity is available."""
-        if not self._attr_available:
-            return self._attr_available
-
-        return self.coordinator.last_update_success
+        return self._attr_available is not False
 
     async def async_select_option(self, option: str) -> None:
         """Change the selected option."""
@@ -275,9 +273,8 @@ class NADReceiverSelect(CoordinatorEntity, SelectEntity):
                 self._attr_available = True
             else:
                 _LOGGER.error("Failed to set %s to %s", self.name, option)
-                self._attr_available = False
         else:
-            self._attr_available = False
+            _LOGGER.debug("Not setting %s while receiver is off", self.name)
 
         self.async_write_ha_state()
         # await self.coordinator.async_request_refresh()

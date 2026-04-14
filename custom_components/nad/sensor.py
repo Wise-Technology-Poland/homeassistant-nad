@@ -27,7 +27,9 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the NAD Receiver sensor."""
-    coordinator: NADReceiverCoordinator = config_entry.runtime_data
+    coordinator: NADReceiverCoordinator = getattr(
+        config_entry, "runtime_data", hass.data[DOMAIN][config_entry.entry_id]
+    )
 
     # Fetch initial data so we have data when entities subscribe
     # await coordinator.async_config_entry_first_refresh()
@@ -115,15 +117,10 @@ class NADReceiverSensor(CoordinatorEntity, SensorEntity):
         ):
             self._attr_native_value = new_value
             self._attr_available = True
-        else:
-            self._attr_available = False
 
         self.async_write_ha_state()
 
     @property
     def available(self) -> bool:
         """Return if entity is available."""
-        if not self._attr_available:
-            return self._attr_available
-
-        return self.coordinator.last_update_success
+        return self._attr_available is not False

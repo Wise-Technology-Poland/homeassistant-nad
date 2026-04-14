@@ -34,7 +34,9 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the NAD Receiver number."""
-    coordinator: NADReceiverCoordinator = config_entry.runtime_data
+    coordinator: NADReceiverCoordinator = getattr(
+        config_entry, "runtime_data", hass.data[DOMAIN][config_entry.entry_id]
+    )
 
     # Fetch initial data so we have data when entities subscribe
     # await coordinator.async_config_entry_first_refresh()
@@ -434,18 +436,13 @@ class NADReceiverNumber(CoordinatorEntity, NumberEntity):
         ):
             self._attr_native_value = float(new_value)
             self._attr_available = True
-        else:
-            self._attr_available = False
 
         self.async_write_ha_state()
 
     @property
     def available(self) -> bool:
         """Return if entity is available."""
-        if not self._attr_available:
-            return self._attr_available
-
-        return self.coordinator.last_update_success
+        return self._attr_available is not False
 
     async def async_set_native_value(self, value: float) -> None:
         _LOGGER.debug("async_set_native_value")
@@ -461,14 +458,16 @@ class NADReceiverNumber(CoordinatorEntity, NumberEntity):
                 response = self.coordinator.exec_command(
                     self.entity_description.key, "=", int(value)
                 )
-            if response.lstrip("-").replace(".", "", 1).isnumeric():
+            if response is None:
+                self._attr_native_value = value
+                self._attr_available = True
+            elif response.lstrip("-").replace(".", "", 1).isnumeric():
                 self._attr_native_value = float(response)
                 self._attr_available = True
             else:
                 _LOGGER.error("Failed to set %s to %s", self.name, value)
-                self._attr_available = False
         else:
-            self._attr_available = False
+            _LOGGER.debug("Not setting %s while receiver is off", self.name)
 
         self.async_write_ha_state()
         # await self.coordinator.async_request_refresh()

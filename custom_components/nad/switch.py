@@ -26,7 +26,9 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the NAD Receiver switch."""
-    coordinator: NADReceiverCoordinator = config_entry.runtime_data
+    coordinator: NADReceiverCoordinator = getattr(
+        config_entry, "runtime_data", hass.data[DOMAIN][config_entry.entry_id]
+    )
 
     # Fetch initial data so we have data when entities subscribe
     # await coordinator.async_config_entry_first_refresh()
@@ -144,29 +146,23 @@ class NADReceiverSwitch(CoordinatorEntity, SwitchEntity):
         ):
             self._attr_is_on = new_state == "on"
             self._attr_available = True
-        else:
-            self._attr_available = False
 
         self.async_write_ha_state()
 
     @property
     def available(self) -> bool:
         """Return if entity is available."""
-        if not self._attr_available:
-            return self._attr_available
-
-        return self.coordinator.last_update_success
+        return self._attr_available is not False
 
     async def async_turn_on(self, **kwargs) -> None:
         """Turn the entity on."""
         _LOGGER.debug("Turning on %s", self.name)
         response = self.coordinator.exec_command(self.entity_description.key, "=", "On")
-        if response.lower() == "on":
+        if response is None or response.lower() == "on":
             self._attr_is_on = True
             self._attr_available = True
         else:
             _LOGGER.error("Failed to switch on %s", self.name)
-            self._attr_available = False
 
         self.async_write_ha_state()
         # await self.coordinator.async_request_refresh()
@@ -177,12 +173,11 @@ class NADReceiverSwitch(CoordinatorEntity, SwitchEntity):
         response = self.coordinator.exec_command(
             self.entity_description.key, "=", "Off"
         )
-        if response.lower() == "off":
+        if response is None or response.lower() == "off":
             self._attr_is_on = False
             self._attr_available = True
         else:
             _LOGGER.error("Failed to switch off %s", self.name)
-            self._attr_available = False
 
         self.async_write_ha_state()
         # await self.coordinator.async_request_refresh()
