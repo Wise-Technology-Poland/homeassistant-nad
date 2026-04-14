@@ -214,8 +214,10 @@ class NADReceiverCoordinator(DataUpdateCoordinator):
                         return None
                     raise CommandNotSupportedError()
 
-                if msg.lower().startswith(command.lower() + "="):
-                    return msg.split("=")[1]
+                for line in msg.replace("\r", "\n").splitlines():
+                    line = line.strip()
+                    if line.lower().startswith(command.lower() + "="):
+                        return line.split("=", 1)[1].strip()
             except UnicodeDecodeError as ex:
                 _LOGGER.error(ex)
                 return None
