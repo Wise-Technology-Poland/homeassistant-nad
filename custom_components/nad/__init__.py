@@ -107,7 +107,9 @@ class NADReceiverCoordinator(DataUpdateCoordinator):
             try:
                 close()
             except Exception:
-                _LOGGER.debug("Ignoring error while closing NAD transport", exc_info=True)
+                _LOGGER.debug(
+                    "Ignoring error while closing NAD transport", exc_info=True
+                )
 
         self.receiver = self._build_receiver()
 
@@ -184,9 +186,20 @@ class NADReceiverCoordinator(DataUpdateCoordinator):
 
         return True
 
+    @staticmethod
+    def _parse_command_response(command: str, msg: str) -> str | None:
+        """Return the value for a command from a possibly multi-line reply."""
+        prefix = f"{command}=".lower()
+        for line in msg.replace("\r", "\n").splitlines():
+            line = line.strip()
+            if line.lower().startswith(prefix):
+                return line.split("=", 1)[1].strip()
+
+        return None
+
     def exec_command(self, command: str, operator: str, value: Optional = None):
         cmd = f"{command}{operator}"
-        if value:
+        if value is not None:
             cmd = f"{cmd}{value}"
 
         allow_retry = self.config[CONF_TYPE] != CONF_TYPE_SERIAL
@@ -214,10 +227,8 @@ class NADReceiverCoordinator(DataUpdateCoordinator):
                         return None
                     raise CommandNotSupportedError()
 
-                for line in msg.replace("\r", "\n").splitlines():
-                    line = line.strip()
-                    if line.lower().startswith(command.lower() + "="):
-                        return line.split("=", 1)[1].strip()
+                if response := self._parse_command_response(command, msg):
+                    return response
             except UnicodeDecodeError as ex:
                 _LOGGER.error(ex)
                 return None
